@@ -1,0 +1,450 @@
+Air Quality Prediction using Machine Learning
+# This script demonstrates how to predict air quality levels using ML algorithms
+
+# Import necessary libraries
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from sklearn.impute import SimpleImputer
+import datetime
+import warnings
+warnings.filterwarnings('ignore')
+
+# Set styling for visualizations
+sns.set(style="whitegrid")
+plt.style.use('ggplot')  # Changed to a more commonly available style
+
+# Create sample data since downloading might fail
+print("Creating sample air quality dataset...")
+# Generate synthetic data for demonstration
+np.random.seed(42)  # For reproducibility
+data = pd.DataFrame({
+    'year': np.random.choice(range(2010, 2015), 1000),
+    'month': np.random.choice(range(1, 13), 1000),
+    'day': np.random.choice(range(1, 29), 1000),
+    'hour': np.random.choice(range(24), 1000),
+    'PM2.5': np.random.lognormal(3, 1, 1000),
+    'PM10': np.random.lognormal(4, 0.7, 1000),
+    'SO2': np.random.lognormal(2, 1.2, 1000),
+    'NO2': np.random.lognormal(3.5, 0.8, 1000),
+    'CO': np.random.lognormal(0.5, 1, 1000),
+    'O3': np.random.lognormal(2.8, 0.9, 1000),
+    'TEMP': np.random.normal(15, 10, 1000),
+    'PRES': np.random.normal(1015, 10, 1000),
+    'DEWP': np.random.normal(8, 8, 1000),
+    'RAIN': np.random.exponential(0.5, 1000),
+    'WSPM': np.random.gamma(2, 1.5, 1000),
+    'wd': np.random.choice(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], 1000),
+    'station': np.random.choice(['Dongsi', 'Guanyuan', 'Tiantan', 'Aotizhongxin'], 1000)
+})
+print("Sample data generated for demonstration.")
+
+# Display basic information about the dataset
+print("Dataset Shape:", data.shape)
+print("\nFirst 5 rows:")
+print(data.head())
+
+# Check for missing values
+print("\nMissing values count:")
+print(data.isnull().sum())
+
+# Data Preprocessing
+print("\nData preprocessing...")
+
+# Create datetime features
+def create_datetime_features(df):
+    """Extract datetime features from year, month, day, hour columns"""
+    if all(col in df.columns for col in ['year', 'month', 'day', 'hour']):
+        # Convert year, month, day, hour to datetime
+        df['datetime'] = pd.to_datetime({
+            'year': df['year'], 
+            'month': df['month'], 
+            'day': df['day'], 
+            'hour': df['hour']
+        })
+        df['dayofweek'] = df['datetime'].dt.dayofweek
+        df['quarter'] = df['datetime'].dt.quarter
+        df['dayofyear'] = df['datetime'].dt.dayofyear
+        # Use a simpler approach for week calculation
+        df['weekofyear'] = df['datetime'].dt.isocalendar().week.astype(int)
+        df['is_weekend'] = df['dayofweek'].isin([5, 6]).astype(int)
+    return df
+
+data = create_datetime_features(data)
+
+# Define target variable (PM2.5 levels) and features
+target_col = 'PM2.5'
+
+# Remove rows where target is missing
+data = data.dropna(subset=[target_col])
+
+# Define features to use based on availability
+numerical_features = [col for col in ['TEMP', 'PRES', 'DEWP', 'RAIN', 'WSPM', 'SO2', 'NO2', 'CO', 'O3', 'PM10',
+                                     'dayofweek', 'hour', 'month', 'is_weekend']
+                     if col in data.columns and col != target_col]
+
+categorical_features = [col for col in ['wd', 'station'] if col in data.columns]
+
+# Split data into train and test sets
+X = data[numerical_features + categorical_features]
+y = data[target_col]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+print(f"Training set size: {X_train.shape[0]}")
+print(f"Test set size: {X_test.shape[0]}")
+
+# Create preprocessing pipeline
+numeric_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='median')),
+    ('scaler', StandardScaler())
+])
+
+categorical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+])
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', numeric_transformer, numerical_features),
+        ('cat', categorical_transformer, categorical_features)
+    ])
+
+# Exploratory Data Analysis
+print("\nPerforming Exploratory Data Analysis...")
+
+try:
+    plt.figure(figsize=(14, 8))
+
+    # Plot PM2.5 distribution
+    plt.subplot(2, 2, 1)
+    sns.histplot(data[target_col].dropna(), kde=True)
+    plt.title(f'Distribution of {target_col}')
+    plt.xlabel(target_col)
+
+    # Plot PM2.5 by hour of day if hour column exists
+    if 'hour' in data.columns:
+        plt.subplot(2, 2, 2)
+        sns.boxplot(x='hour', y=target_col, data=data.sample(min(5000, len(data))))
+        plt.title(f'{target_col} by Hour of Day')
+        plt.xlabel('Hour')
+        plt.ylabel(target_col)
+        plt.xticks(rotation=90)
+
+    # Plot correlation matrix for numerical features
+    plt.subplot(2, 2, 3)
+    corr_features = [f for f in numerical_features + [target_col] if f in data.columns]
+    correlation = data[corr_features].corr()
+    sns.heatmap(correlation, annot=True, cmap='coolwarm', fmt=".2f", linewidths=0.5)
+    plt.title('Feature Correlations')
+
+    # Plot PM2.5 by month if month column exists
+    if 'month' in data.columns:
+        plt.subplot(2, 2, 4)
+        monthly_avg = data.groupby('month')[target_col].mean().reset_index()
+        sns.lineplot(x='month', y=target_col, data=monthly_avg, marker='o')
+        plt.title(f'Average {target_col} by Month')
+        plt.xlabel('Month')
+        plt.ylabel(f'Average {target_col}')
+
+    plt.tight_layout()
+    plt.savefig('eda_plots.png')  # Save figure to file instead of showing interactively
+    print("EDA plots saved to 'eda_plots.png'")
+except Exception as e:
+    print(f"Error creating EDA plots: {e}")
+    print("Continuing with model training...")
+
+# Function to evaluate multiple models
+def evaluate_models(X_train, X_test, y_train, y_test, preprocessor):
+    """Evaluate multiple models and return performances"""
+    models = {
+        'Linear Regression': LinearRegression(),
+        'Ridge Regression': Ridge(alpha=1.0),
+        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
+        'Gradient Boosting': GradientBoostingRegressor(n_estimators=100, random_state=42)
+    }
+    
+    # Remove XGBoost since it might not be installed
+    
+    results = {}
+    
+    for name, model in models.items():
+        print(f"\nTraining {name}...")
+        try:
+            # Create and train pipeline
+            full_pipeline = Pipeline(steps=[
+                ('preprocessor', preprocessor),
+                ('model', model)
+            ])
+            
+            full_pipeline.fit(X_train, y_train)
+            
+            # Make predictions
+            train_pred = full_pipeline.predict(X_train)
+            test_pred = full_pipeline.predict(X_test)
+            
+            # Calculate metrics
+            train_rmse = np.sqrt(mean_squared_error(y_train, train_pred))
+            test_rmse = np.sqrt(mean_squared_error(y_test, test_pred))
+            test_mae = mean_absolute_error(y_test, test_pred)
+            test_r2 = r2_score(y_test, test_pred)
+            
+            # Store results
+            results[name] = {
+                'Train RMSE': train_rmse,
+                'Test RMSE': test_rmse,
+                'Test MAE': test_mae,
+                'Test R²': test_r2,
+                'pipeline': full_pipeline
+            }
+            
+            print(f"{name} - Train RMSE: {train_rmse:.2f}, Test RMSE: {test_rmse:.2f}, Test R²: {test_r2:.2f}")
+        except Exception as e:
+            print(f"Error training {name}: {e}")
+            continue
+    
+    return results
+
+# Train and evaluate models
+print("\nTraining and evaluating models...")
+model_results = evaluate_models(X_train, X_test, y_train, y_test, preprocessor)
+
+if not model_results:
+    print("No models were successfully trained. Exiting.")
+    exit()
+
+# Find the best model based on test RMSE
+best_model_name = min(model_results, key=lambda k: model_results[k]['Test RMSE'])
+best_model = model_results[best_model_name]['pipeline']
+print(f"\nBest model: {best_model_name} with Test RMSE: {model_results[best_model_name]['Test RMSE']:.2f}")
+
+# Visualize model performance comparison
+try:
+    plt.figure(figsize=(12, 6))
+    model_names = list(model_results.keys())
+    test_rmse = [model_results[model]['Test RMSE'] for model in model_names]
+    test_r2 = [model_results[model]['Test R²'] for model in model_names]
+
+    plt.subplot(1, 2, 1)
+    bars = plt.bar(model_names, test_rmse)
+    plt.title('Test RMSE by Model')
+    plt.xlabel('Model')
+    plt.ylabel('RMSE (Lower is better)')
+    plt.xticks(rotation=45, ha='right')
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                f'{height:.2f}', ha='center', va='bottom')
+
+    plt.subplot(1, 2, 2)
+    bars = plt.bar(model_names, test_r2)
+    plt.title('Test R² by Model')
+    plt.xlabel('Model')
+    plt.ylabel('R² (Higher is better)')
+    plt.xticks(rotation=45, ha='right')
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                f'{height:.2f}', ha='center', va='bottom')
+
+    plt.tight_layout()
+    plt.savefig('model_comparison.png')
+    print("Model comparison plots saved to 'model_comparison.png'")
+except Exception as e:
+    print(f"Error creating model comparison plots: {e}")
+
+# Analyze feature importance for the best model (if applicable)
+try:
+    if best_model_name in ['Random Forest', 'Gradient Boosting']:
+        # Get feature names after preprocessing - use a simpler approach
+        feature_names = numerical_features.copy()
+        
+        # Add encoded categorical features
+        for feature in categorical_features:
+            categories = data[feature].unique()
+            for category in categories:
+                feature_names.append(f"{feature}_{category}")
+        
+        # Get feature importances
+        if hasattr(best_model.named_steps['model'], 'feature_importances_'):
+            importances = best_model.named_steps['model'].feature_importances_
+            
+            # If the feature names and importances have different lengths, adjust
+            if len(feature_names) != len(importances):
+                print("Warning: Feature names and importances have different lengths. Using generic feature names.")
+                feature_names = [f"Feature {i}" for i in range(len(importances))]
+            
+            # Create a DataFrame for better visualization
+            importance_df = pd.DataFrame({
+                'Feature': feature_names,
+                'Importance': importances
+            }).sort_values('Importance', ascending=False)
+            
+            # Plot feature importances
+            plt.figure(figsize=(10, 6))
+            top_features = importance_df.head(15)
+            sns.barplot(x='Importance', y='Feature', data=top_features)
+            plt.title(f'Top 15 Feature Importances for {best_model_name}')
+            plt.tight_layout()
+            plt.savefig('feature_importance.png')
+            print("Feature importance plot saved to 'feature_importance.png'")
+            
+            print("\nTop 10 most important features:")
+            print(importance_df.head(10))
+except Exception as e:
+    print(f"Error analyzing feature importance: {e}")
+
+# Function to make predictions for future dates
+def predict_future_air_quality(model, days=7, hours_per_day=24):
+    """Generate predictions for future air quality based on historical patterns"""
+    print("\nGenerating predictions for future air quality...")
+    try:
+        # Get the last date in the dataset
+        if 'datetime' in data.columns:
+            last_date = data['datetime'].max()
+        else:
+            last_date = datetime.datetime.now()
+        
+        # Create future dates
+        future_dates = pd.date_range(start=last_date, periods=days*hours_per_day+1, freq='H')[1:]
+        
+        # Create a DataFrame for future predictions
+        future_df = pd.DataFrame({'datetime': future_dates})
+        future_df['year'] = future_df['datetime'].dt.year
+        future_df['month'] = future_df['datetime'].dt.month
+        future_df['day'] = future_df['datetime'].dt.day
+        future_df['hour'] = future_df['datetime'].dt.hour
+        future_df['dayofweek'] = future_df['datetime'].dt.dayofweek
+        future_df['quarter'] = future_df['datetime'].dt.quarter
+        future_df['dayofyear'] = future_df['datetime'].dt.dayofyear
+        future_df['weekofyear'] = future_df['datetime'].dt.isocalendar().week.astype(int)
+        future_df['is_weekend'] = future_df['dayofweek'].isin([5, 6]).astype(int)
+        
+        # Fill in other features with median values from training data
+        for feature in numerical_features:
+            if feature not in future_df.columns and feature in data.columns:
+                future_df[feature] = data[feature].median()
+        
+        # Fill in categorical features with most common values
+        for feature in categorical_features:
+            if feature not in future_df.columns and feature in data.columns:
+                future_df[feature] = data[feature].mode()[0]
+        
+        # Prepare features for prediction
+        future_X = future_df[numerical_features + categorical_features]
+        
+        # Make predictions
+        future_predictions = model.predict(future_X)
+        future_df[f'Predicted_{target_col}'] = future_predictions
+        
+        # Plot predictions
+        plt.figure(figsize=(12, 6))
+        plt.plot(future_df['datetime'], future_df[f'Predicted_{target_col}'])
+        plt.title(f'Predicted {target_col} for the Next {days} Days')
+        plt.xlabel('Date')
+        plt.ylabel(f'Predicted {target_col}')
+        plt.grid(True)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig('future_predictions.png')
+        print("Future predictions plot saved to 'future_predictions.png'")
+        
+        # Display daily averages
+        daily_avg = future_df.groupby(future_df['datetime'].dt.date)[f'Predicted_{target_col}'].mean().reset_index()
+        daily_avg.columns = ['Date', f'Avg Predicted {target_col}']
+        print("\nPredicted daily average air quality:")
+        print(daily_avg.head())
+        
+        return future_df
+    except Exception as e:
+        print(f"Error in future predictions: {e}")
+        return None
+
+# Make future predictions using the best model
+future_predictions = predict_future_air_quality(best_model, days=7)
+
+if future_predictions is not None:
+    # Function to evaluate air quality based on AQI standards
+    def evaluate_air_quality(pm25_value):
+        """Evaluate PM2.5 value according to US EPA AQI standards"""
+        if pm25_value <= 12.0:
+            return "Good", "green"
+        elif pm25_value <= 35.4:
+            return "Moderate", "yellow"
+        elif pm25_value <= 55.4:
+            return "Unhealthy for Sensitive Groups", "orange"
+        elif pm25_value <= 150.4:
+            return "Unhealthy", "red"
+        elif pm25_value <= 250.4:
+            return "Very Unhealthy", "purple"
+        else:
+            return "Hazardous", "maroon"
+
+    try:
+        # Apply evaluation to future predictions
+        quality_categories = []
+        colors = []
+
+        for value in future_predictions[f'Predicted_{target_col}']:
+            category, color = evaluate_air_quality(value)
+            quality_categories.append(category)
+            colors.append(color)
+
+        future_predictions['AQI_Category'] = quality_categories
+        future_predictions['Color'] = colors
+
+        # Plot the distribution of predicted air quality categories
+        plt.figure(figsize=(10, 6))
+        category_counts = future_predictions['AQI_Category'].value_counts()
+        bars = plt.bar(category_counts.index, category_counts.values)
+        
+        # Color the bars (simplified to avoid potential issues)
+        for i, bar in enumerate(bars):
+            if i < len(future_predictions['Color'].unique()):
+                bar.set_color(future_predictions['Color'].unique()[i])
+                
+        plt.title('Distribution of Predicted Air Quality Categories')
+        plt.xlabel('Air Quality Category')
+        plt.ylabel('Count')
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        plt.savefig('aqi_categories.png')
+        print("AQI categories plot saved to 'aqi_categories.png'")
+
+        # Summary of findings
+        print("\n========== Air Quality Prediction Summary ==========")
+        print(f"Best performing model: {best_model_name}")
+        print(f"Test RMSE: {model_results[best_model_name]['Test RMSE']:.2f}")
+        print(f"Test R²: {model_results[best_model_name]['Test R²']:.2f}")
+
+        most_common_category = future_predictions['AQI_Category'].mode()[0]
+        print(f"\nMost common predicted air quality category: {most_common_category}")
+
+        worst_day = future_predictions.groupby(future_predictions['datetime'].dt.date)[f'Predicted_{target_col}'].mean().idxmax()
+        worst_value = future_predictions.groupby(future_predictions['datetime'].dt.date)[f'Predicted_{target_col}'].mean().max()
+        worst_category, _ = evaluate_air_quality(worst_value)
+        print(f"Day with worst predicted air quality: {worst_day}, Average PM2.5: {worst_value:.2f}, Category: {worst_category}")
+
+        best_day = future_predictions.groupby(future_predictions['datetime'].dt.date)[f'Predicted_{target_col}'].mean().idxmin()
+        best_value = future_predictions.groupby(future_predictions['datetime'].dt.date)[f'Predicted_{target_col}'].mean().min()
+        best_category, _ = evaluate_air_quality(best_value)
+        print(f"Day with best predicted air quality: {best_day}, Average PM2.5: {best_value:.2f}, Category: {best_category}")
+    except Exception as e:
+        print(f"Error in air quality evaluation: {e}")
+
+# Conclusion
+print("\n========== Conclusion ==========")
+print(f"This analysis demonstrates the effectiveness of {best_model_name} in predicting PM2.5 air quality levels.")
+print("The model can be used to forecast air quality conditions, helping to plan outdoor activities and take precautionary measures.")
+print("For better results, additional features such as traffic data, industrial activity, and more detailed weather information could be incorporated.")
+
+print("\n========== End of Analysis ==========")
